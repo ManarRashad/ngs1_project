@@ -1,0 +1,269 @@
+#Documentation of Assignment
+mkdir ~/assignment && cd ~/assignment
+
+### prepare data
+1- #main_data
+mkdir ~/assignment/main_reads && cd ~/assignment/main_reads 
+#download 25M data from SRA database
+wget -c ftp://ftp-trace.ncbi.nih.gov/sra/sra-instant/reads/ByRun/sra/SRR/SRR879/SRR8797509/SRR8797509.sra
+# Take 5M from 25M data and change SRA data into 2 FASTQ files(R1 and R2) using sra toolkit 
+conda install -y sra-tools
+fastq-dump --split-files -X 5000000 SRR8797509.sra
+#splitting of main reads into 5 sub-groups each contain 1M 
+conda install -c bioconda seqkit
+seqkit split2 -1 SRR8797509_1.fastq -2 SRR8797509_2.fastq -p 5 -O out -f
+
+2- #shuffled_data
+mkdir -p ~/assignment/Shuffled_reads && cd ~/assignment/Shuffled_reads
+#shuffling main reads & spliting of shuffled groups
+time seqkit shuffle -2 -s ~/assignment/main_reads/SRR8797509_1.fastq > shuffle_SRR8797509_1.fastq
+time seqkit shuffle -2 -s ~/assignment/main_reads/SRR8797509_2.fastq > shuffle_SRR8797509_2.fastq
+seqkit split2 -1 shuffle_SRR8797509_1.fastq -2 shuffle_SRR8797509_2.fastq -p 5 -O out -f
+
+
+### FASTQC on the first sample before and after shuffling
+#install fatqc and multiqc
+conda install -c bioconda fastqc
+conda install -c bioconda multiqc 
+#FASTQC for unshuffled data
+mkdir -p ~/assignment/FASTQC_unshuffled && cd ~/assignment/FASTQC_unshuffled
+for f in ~/assignment/main_reads/out/SRR8797509_*.part_001.fastq;do
+fastqc -t 1 -f fastq -noextract $f;done
+#merge the results of FASTQC of 2 reads before shuffling
+multiqc -z -o . .
+
+# FASTQC for shuffled data
+mkdir -p ~/assignment/FASTQC_shuffled && cd ~/assignment/FASTQC_shuffled
+for f in ~/assignment/Shuffled_reads/out/shuffle_SRR8797509_*.part_001.fastq;do
+fastqc -t 1 -f fastq -noextract $f;done
+#merge the results of FASTQC of 2 reads after shuffling
+multiqc -z -o . .
+
+
+###Trimming
+conda install -c bioconda trimmomatic 
+#mild trimming for unshuffled reads
+mkdir -p ~/assignment/mild_trimmed && cd ~/assignment/mild_trimmed
+for SAMPLE in 1 2 3 4 5;
+    do
+      R1= $HOME/assignment/main_reads/out/SRR8797509_1.part_00${SAMPLE}.fastq
+      R2= $HOME/assignment/main_reads/out/SRR8797509_2.part_00${SAMPLE}.fastq
+      newf1= $HOME/assignment/mild_trimmed/SRR8797509_1.part_00${SAMPLE}.pe.trim.fastq
+      newf2= $HOME/assignment/mild_trimmed/SRR8797509_2.part_00${SAMPLE}.pe.trim.fastq
+      newf1U= $HOME/assignment/mild_trimmed/SRR8797509_1.part_00${SAMPLE}.se.trim.fastq
+      newf2U= $HOME/assignment/mild_trimmed/SRR8797509_2.part_00${SAMPLE}.se.trim.fastq
+
+      adap="/home/manar/miniconda3/envs/ngs1/share/trimmomatic-0.39-1/adapters"
+
+      trimmomatic PE -threads 1 -phred33 -trimlog trimLogFile -summary statsSummaryFile  $R1 $R2 $newf1 $newf1U $newf2 $newf2U \
+      ILLUMINACLIP:$adap/TruSeq3-PE.fa:2:30:10:1 SLIDINGWINDOW:4:15 MINLEN:36 
+    done
+
+#aggressive trimming for shuffled reads
+mkdir -p ~/assignment/aggr_trimmed && cd ~/assignment/aggr_trimmed
+for SAMPLE in 1 2 3 4 5;
+    do
+      R1= $HOME/assignment/Shuffled_reads/out/shuffle_SRR8797509_1.part_001.part_00${SAMPLE}.fastq
+      R2= $HOME/assignment/Shuffled_reads/out/shuffle_SRR8797509_2.part_001.part_00${SAMPLE}.fastq
+      newf1= $HOME/assignment/aggr_trimmed/shuffle_SRR8797509_1.part_001.part_00${SAMPLE}.pe.trim.fastq
+      newf2= $HOME/assignment/aggr_trimmed/shuffle_SRR8797509_2.part_001.part_00${SAMPLE}.pe.trim.fastq
+      newf1U= $HOME/assignment/aggr_trimmed/shuffle_SRR8797509_1.part_001.part_00${SAMPLE}.se.trim.fastq
+      newf2U= $HOME/assignment/aggr_trimmed/shuffle_SRR8797509_2.part_001.part_00${SAMPLE}.se.trim.fastq
+
+      adap="/home/manar/miniconda3/envs/ngs1/share/trimmomatic-0.38-1/adapters"
+
+      trimmomatic PE -threads 1 -phred33 -trimlog trimLogFile -summary statsSummaryFile  $R1 $R2 $newf1 $newf1U $newf2 $newf2U \
+      ILLUMINACLIP:$adap/TruSeq3-PE.fa:2:30:10:1 SLIDINGWINDOW:2:30 MINLEN:36 
+    done
+
+
+### Data Alignment
+## install the reqired tool to make alignment with BWA
+conda install -c bioconda bwa 
+
+## indexing 
+mkdir -p ~/assignment/bwa_align/bwaIndex && cd ~/assignment/bwa_align/bwaIndex
+ln -s ~/workdir/sample_data/gencode.v29.pc_transcripts.chr22.simplified.fa .
+bwa index -a bwtsw gencode.v29.pc_transcripts.chr22.simplified.fa
+
+## Aligning the samples before shuffling using bwa
+cd ~/assignment/bwa_align
+for SAMPLE in 1 2 3 4 5;
+    do
+      R1= $HOME/assignment/mild_trimmed/SRR8797509_1.part_00${SAMPLE}.pe.trim.fastq
+      R2= $HOME/assignment/mild_trimmed/SRR8797509_2.part_00${SAMPLE}.pe.trim.fastq
+      /usr/bin/time -v bwa mem bwaIndex/gencode.v29.pc_transcripts.chr22.simplified.fa $R1 $R2 > BWA_SRR8797509.part_00${SAMPLE}.sam
+    done
+
+## install the reqired tool to make alignment with hisat
+conda install -c bioconda hisat2 
+
+## Indexing
+mkdir -p ~/assignment/hisat_align/hisatIndex && cd ~/assignment/hisat_align/hisatIndex
+ln -s ~/workdir/sample_data/chr22_with_ERCC92.fa .
+
+hisat2_extract_splice_sites.py ~/workdir/sample_data/chr22_with_ERCC92.gtf > splicesites.tsv
+hisat2_extract_exons.py ~/workdir/sample_data/chr22_with_ERCC92.gtf > exons.tsv
+hisat2-build -p 1 --ss splicesites.tsv --exon exons.tsv chr22_with_ERCC92.fa chr22_with_ERCC92
+
+## Alignment of the samples after shuffling to human chr 22 using hisat 
+cd ~/assignment/hisat_align
+for SAMPLE in 1 2 3 4 5;
+    do
+      R1= $HOME/assignment/aggr_trimmed/shuffle_SRR8797509_1.part_001.part_00${SAMPLE}.pe.trim.fastq
+      R2= $HOME/ssignment/aggr_trimmed/shuffle_SRR8797509_2.part_001.part_00${SAMPLE}.pe.trim.fastq
+      hisat2 -p 1 -x hisatIndex/chr22_with_ERCC92 --dta --rna-strandness RF -1 $R1 -2 $R2 -S hisat_SRR8797509.part_00${SAMPLE}.sam
+    done
+
+#### Data Assembly 
+
+## Assembly for the unshuffled data out of BWA alignment
+
+cd ~/assignment/bwa_align
+
+## Prepare the data for assembly
+## install Samtools
+conda install samtools
+
+## convert the SAM file into BAM file 
+for SAMPLE in 1 2 3 4 5;
+    do
+      samtools view -bS BWA_SRR8797509.part_00${SAMPLE}.sam > BWA_SRR8797509.part_00${SAMPLE}.bam
+    done
+
+## convert the BAM file to a sorted BAM file. 
+for SAMPLE in 1 2 3 4 5;
+    do
+      samtools sort BWA_SRR8797509.part_00${SAMPLE}.bam -o BWA_SRR8797509.part_00${SAMPLE}.sorted.bam
+    done
+## Export statistics report for each sample indvidually
+for SAMPLE in 1 2 3 4 5;
+    do
+      samtools flagstat BWA_SRR8797509.part_00${SAMPLE}.sorted.bam > unshuffled.stat_${SAMPLE}.txt;
+    done
+
+## install required tool for assembly 
+## install stringtie
+conda install stringtie
+## Assembly without known annotations
+for SAMPLE in 1 2 3 4 5;
+    do
+      stringtie BWA_SRR8797509.part_00${SAMPLE}.sorted.bam --rf -l ref_free_${SAMPLE} -o ref_free_${SAMPLE}.gtf
+    done
+# Assembly with known previous annotations
+for SAMPLE in 1 2 3 4 5;
+    do
+      stringtie BWA_SRR8797509.part_00${SAMPLE}.sorted.bam --rf -l ref_sup_${SAMPLE} -G ~/workdir/sample_data/chr22_with_ERCC92.gtf -o ref_sup_${SAMPLE}.gtf 
+    done
+
+
+## Assembly for shuffled data out of hisat alignment
+#prepare data for assembly
+cd ~/assignment/hisat_align
+
+## convert the SAM file into BAM file 
+for SAMPLE in 1 2 3 4 5;
+    do
+      samtools view -bS hisat_SRR8797509.part_00${SAMPLE}.sam > hisat_SRR8797509.part_00${SAMPLE}.bam
+    done
+
+## convert the BAM file to a sorted BAM file. 
+for SAMPLE in 1 2 3 4 5;
+    do
+      samtools sort hisat_SRR8797509.part_00${SAMPLE}.bam -o hisat_SRR8797509.part_00${SAMPLE}.sorted.bam
+    done
+
+## Export statistics report for each sample indvidually
+for SAMPLE in 1 2 3 4 5;
+    do
+      samtools flagstat hisat_SRR8797509.part_00${SAMPLE}.sorted.bam > shuffled.stat_${SAMPLE}.txt;
+    done
+
+
+## Assembly without known annotations
+for SAMPLE in 1 2 3 4 5;
+    do
+      stringtie hisat_SRR8797509.part_00${SAMPLE}.sorted.bam--rf -l ref_free_${SAMPLE} -o ref_free_${SAMPLE}.gtf
+    done
+
+# Assembly with known previous annotations
+for SAMPLE in 1 2 3 4 5;
+    do
+      stringtie hisat_SRR8797509.part_00${SAMPLE}.sorted.bam --rf -l ref_sup_${SAMPLE} -G ~/workdir/sample_data/chr22_with_ERCC92.gtf -o ref_sup_${SAMPLE}.gtf 
+    done
+
+# Using GTF-Compare to Compare the Generated Annotation Files to a Reference Annotation.
+
+##Create virtual evironment with conda
+
+conda create -n ngs-gtf python=3.6 anaconda
+source activate ngs-gtf
+conda install -c conda-forge pypy3.5
+wget https://bootstrap.pypa.io/get-pip.py
+pypy3 get-pip.py
+
+#Install prerequisites
+pypy3 -m pip install gffutils numpy tqdm 'intervaltree<3.0'
+
+#download required files
+mkdir -p ~/assignment/gtf_compare/gtfs && cd ~/assignment/gtf_compare/gtfs
+ln -s ~/assignment/bwa_align/ref_free_*.gtf .
+ln -s ~/assignment/bwa_align/ref_sup_*.gtf .
+# ln -s ~/workdir/sample_data/chr22_with_ERCC92.gtf . #in case of comparing between sup.gtf and chr22.gtf
+
+mkdir -p ~/assignment/gtf-compare/method_one && cd ~/assignment/gtf-compare/method_one
+wget https://raw.githubusercontent.com/abdelrahmanMA/gtf-compare/master/code/comp.py
+wget https://raw.githubusercontent.com/abdelrahmanMA/gtf-compare/master/code/stat.py
+
+for SAMPLE in 1 2 3 4 5;
+    do
+      pypy3 comp.py -r ../gtfs/ref_sup_${SAMPLE}.gtf ../gtfs/ref_free_${SAMPLE}.gtf
+      pypy3 stat.py
+    done
+
+#in case of comparison between sup.gtf and chr22.gtf
+for SAMPLE in 1 2 3 4 5;
+    do
+      pypy3 comp.py -r ../gtfs/chr22_with_ERCC92.gtf ../gtfs/ref_sup_${SAMPLE}.gtf 
+      pypy3 stat.py
+    done
+
+## Differential_expression
+mkdir -p ~/assignment/diff_exp && cd ~/assignment/diff_exp
+mkdir ~/assignment/ngs1_project/out && cd ~/assignment/ngs1_project/out | mv ~/assignment/ngs1_project/main_reads/out/*.fastq out | mv ~/assignment/ngs1_project/shuffled_reads/out/*.fastq out
+#download data
+#wget -c https://0x0.st/zK57.gz -O ref.tar.gz
+#tar xvzf ref.tar.gz
+#wget -c https://raw.githubusercontent.com/mr-eyes/nu-ngs01/master/Day-6/deseq1.r
+#wget -c https://raw.githubusercontent.com/mr-eyes/nu-ngs01/master/Day-6/draw-heatmap.r
+
+#1 Setup enviornemnt
+#conda activate ngs1
+# conda install kallisto
+# conda install samtools
+
+# Install subread, we will use featureCount : a software program developed for counting reads to genomic features such as genes, exons, promoters and genomic bins.
+conda install subread
+
+# install r and dependicies
+#conda install r
+conda install -y bioconductor-deseq r-gplots
+RUNLOG=runlog.txt
+
+#Step 2 (Quantification)Step 
+GTF=~/workdir/sample_data/chr22_with_ERCC92.gtf
+
+# Generate the counts.
+featureCounts -a $GTF -g gene_name -o counts.txt  ~/assignment/bwa_align/BWA_SRR8797509*.bam  ~/assignment/hisat_align/hisat_SRR8797509*.bam
+# Simplify the file to keep only the count columns.
+cat counts.txt | cut -f 1,7-12 > simple_counts.txt
+# Analyze the counts with DESeq1.
+cat simple_counts.txt | Rscript deseq1.r 5x5 > results_deseq1.tsv
+
+#View only rows with pval < 0.05
+cat results_deseq1.tsv | awk ' $8 < 0.05 { print $0 }' > filtered_results_deseq1.tsv
+cat filtered_results_deseq1.tsv | Rscript draw-heatmap.r > hisat_output.pdf
+
+#Results
+https://drive.google.com/open?id=1LXhvdyPN7m-t0-IXVv0cCoxsAoeVru9m
+https://drive.google.com/open?id=1pxTE9S4vbRlQOJJPI5CLKK7OXsX8yZya
